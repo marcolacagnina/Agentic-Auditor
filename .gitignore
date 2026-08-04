@@ -1,0 +1,56 @@
+# ----------------------
+# Python artifacts
+# ----------------------
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+chroma_db/
+
+# Virtual Environment
+venv/
+env/
+.env
+
+# ----------------------
+# ML artifacts
+# ----------------------
+data/
+/models/
+mlruns/        # MLflow local tracking
+mlflow.db
+outputs/
+adapters/
+
+# ----------------------
+# Testing
+# ----------------------
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# C++ Build artifacts
+/cpp_inference/build
+
+
+# ----------------------
+# OS files
+# ----------------------
+.DS_Store
+Thumbs.db
+
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
+
+
+# ----------------------
+# Docker artifacts
+# ----------------------
+*.tar               
+*.img               
