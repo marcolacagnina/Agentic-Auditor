@@ -1,93 +1,85 @@
-# Agentic MLOps Finance Pipeline
+# Agentic Auditor
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
-![Python 3.11](https://img.shields.io/badge/Python-3.11-blue)
-![PySpark](https://img.shields.io/badge/Data_Eng-PySpark-E25A1C)
-![MLX](https://img.shields.io/badge/Fine_Tuning-Apple_MLX-black)
+![MLX](https://img.shields.io/badge/Local_Compute-Apple_MLX-black)
 ![LangGraph](https://img.shields.io/badge/Agentic-LangGraph-purple)
-![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
 ![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B)
-![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
 
-<details>
-  <summary><strong>Table of Contents</strong></summary>
-  <ol>
-    <li><a href="#introduction">Introduction</a></li>
-    <li><a href="#architecture-workflow">Architecture & Workflow</a></li>
-    <li><a href="#prerequisites">Prerequisites</a></li>
-    <li><a href="#installation">Installation</a></li>
-    <li><a href="#usage-pipeline">Usage Pipeline</a></li>
-    <li><a href="#project-structure">Project Structure</a></li>
-  </ol>
-</details>
 
 ## Introduction
 
-This repository demonstrates a complete, end-to-end **Agentic MLOps** lifecycle for financial analysis. It moves beyond standard RAG by introducing distributed data engineering, synthetic dataset generation, local LLM fine-tuning, and a dual-model autonomous agent exposed via a containerized UI.
+This repository demonstrates a complete, end-to-end **Agentic MLOps** lifecycle for financial auditing. It moves beyond standard RAG by introducing distributed data engineering, synthetic dataset generation, local LLM fine-tuning, and a strict multi-agent architecture to prevent mathematical hallucinations.
 
 **Core Capabilities**:
-- **Distributed Data Engineering:** Uses **PySpark** to process and chunk raw financial text into highly compressed Parquet files and ingest them into ChromaDB.
-- **Synthetic Data Generation:** Leverages Llama-3.1 (Teacher Model) to generate high-quality instruction-tuning datasets (Q&A pairs) from financial contexts.
-- **Local LoRA Fine-Tuning:** Uses Apple's **MLX** framework to fine-tune a lightweight Qwen2.5-0.5B model directly on Apple Silicon Unified Memory to act as a "Tone Synthesizer".
-- **Dual-Model Agentic Graph:** Uses **LangGraph** to orchestrate Llama-3.1 (the "Brain/ReAct Agent") which writes Python code and queries databases, feeding its output to the locally fine-tuned Qwen model (the "Synthesizer") for stylistic refinement.
-- **Microservices Deployment:** Features a FastAPI backend serving the LangGraph pipeline, paired with a Dockerized **Streamlit** frontend.
+- **Distributed Data Engineering:** Uses **PySpark** to process raw financial text. Implements custom context-aware chunking (Header Injection) to preserve tabular structures before saving to Parquet files and ChromaDB.
+- **Agentic Distillation:** Leverages Llama-3.1 (Teacher Model via Groq) to autonomously generate an instruction-tuning dataset containing complex Chain-of-Thought reasoning and Python code execution paths.
+- **Efficient Fine-Tuning:** Uses Apple's **MLX** framework to natively fine-tune a **Qwen2.5-Coder-3B** model in 4-bit precision on Apple Silicon Unified Memory.
+- **Hybrid Edge-Cloud Orchestration:** Uses **LangGraph** to route traffic. A cloud model (Groq/Llama) acts as a strict Router/Evaluator to prevent hallucinations, while the locally fine-tuned MLX model handles deterministic Python code generation and execution in a sandbox.
 
-## Architecture Workflow
+## Key Engineering Highlights
+*   **Self-Querying RAG:** Implemented Metadata filtering (Ticker extraction) pre-retrieval to avoid "context poisoning" across different companies' financial reports.
+*   **Strict Persona Alignment:** The Evaluator node strictly checks if the context contains both the requested *entity* and *metric*. If missing, it overrides the LLM's generic fallback with a strict corporate apology, preventing out-of-domain hallucinations.
+*   **Code Sandbox Execution:** The local model writes Python code that is physically executed on the machine, extracting exact percentages and margins rather than relying on the LLM's flawed internal math.
+
+## Compound AI System Architecture
+
+The agent follows a strictly routed Directed Acyclic Graph (DAG) to optimize execution costs and guarantee data accuracy.
 
 ```mermaid
-flowchart TD
-    subgraph Data Engineering
-        A[Raw TXT Financials] -->|PySpark| B[Chunked Parquet Data]
-        B -->|Batch Upsert| C[(ChromaDB Vector Store)]
-    end
+graph TD
+    %% Styling
+    classDef start_end fill:#2ecc71,stroke:#27ae60,stroke-width:2px,color:white,font-weight:bold;
+    classDef cloud_llm fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
+    classDef local_llm fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
+    classDef db fill:#f39c12,stroke:#d35400,stroke-width:2px,color:white;
+    classDef tool fill:#e74c3c,stroke:#c0392b,stroke-width:2px,color:white;
 
-    subgraph Model Factory
-        B -->|LangChain Llama-3.1| D[Synthetic Q&A JSONL]
-        D -->|MLX LoRA Training| E[Qwen2.5 LoRA Adapters]
-    end
+    %% Nodes
+    START((START)):::start_end
+    END((END)):::start_end
+    
+    router[Router<br><i>Groq Llama 3.1</i>]:::cloud_llm
+    retrieve[(ChromaDB<br><i>Self-Querying</i>)]:::db
+    evaluator[Evaluator<br><i>Groq Llama 3.1</i>]:::cloud_llm
+    coder[MLX Coder<br><i>Local Qwen 3B</i>]:::local_llm
+    sandbox[Python Sandbox<br><i>Local Execution</i>]:::tool
+    synthesizer[Synthesizer<br><i>Groq Llama 3.1</i>]:::cloud_llm
 
-    subgraph Production Inference
-        F[Streamlit UI Docker] <-->|REST API| G[FastAPI Backend]
-        G <--> H{LangGraph Orchestrator}
-        H <-->|RAG Tool| C
-        H <-->|Code Sandbox| I[Python Executor Tool]
-        H -->|Raw Answer| J[MLX Synthesizer Node]
-        J <-->|Apply Adapters| E
-        J -->|Final Synthesis| G
-    end
+    %% Edges
+    START --> router
+    
+    router -- "general_chat" --> synthesizer
+    router -- "needs_financial_data" --> retrieve
+    
+    retrieve --> evaluator
+    
+    evaluator -- "needs_math" --> coder
+    evaluator -- "can_answer_directly" --> synthesizer
+    evaluator -- "insufficient_data" --> synthesizer
+    
+    coder --> |"Generates Python"| sandbox
+    sandbox --> |"Execution Result"| synthesizer
+    
+    synthesizer --> END
 ```
 
 ## Prerequisites
-- Apple Silicon Mac recommended for MLX local training and unified memory inference.
+- Apple Silicon Mac (M1/M2/M3) with at least 16GB RAM for MLX local training.
 - Python 3.11
 - Java (Required for PySpark)
-- Docker Desktop or OrbStack
 - A valid **Groq API Key**
 
-## Installation
+## Setup environment
+```bash
+git clone https://github.com/marcolacagnina/Agentic-Auditor.git
+cd Agentic-Auditor/
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/marcolacagnina/agentic-mlops-finance.git
-    cd agentic-mlops-finance/
-    ```
-
-2.  **Create a virtual environment (recommended)**
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
-
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-    
-4.  **Environment Variables:**
-    Create a `.env` file in the root directory:
-    ```bash
-    GROQ_API_KEY=gsk_your_api_key_here
-    ```
+# Create .env file
+echo "GROQ_API_KEY=your_key_here" > .env
+```
 
 ## Usage Pipeline
 This project is designed to be executed sequentially to mimic a real MLOps lifecycle.
@@ -100,36 +92,31 @@ python -m src.spark_pipeline.load_chroma
 ```
 
 2. Model Factory (Synthetic Data & MLX Training)
-Generate the training dataset and fine-tune the local model:
+Generate the Distillation dataset and fine-tune the local coder model:
 ```bash
 python -m src.dataset_gen.generate_dataset
 python -m src.model_training.prepare_lora_dataset
 
-# Train the model locally using MLX
+# Train the model locally using MLX (Qwen 3B Coder)
 mlx_lm.lora \
-  --model mlx-community/Qwen2.5-0.5B-Instruct-4bit \
+  --model mlx-community/Qwen2.5-Coder-3B-Instruct-4bit \
   --train \
   --data data/processed \
-  --iters 200 \
-  --batch_size 1 \
-  --adapter-path data/adapters
+  --iters 100 \
+  --batch-size 1 \
+  --num-layers 16 \
+  --learning-rate 2e-5 \
+  --max-seq-length 4096
 
-# Test the newly trained model
+# Test the newly trained weights
 python -m src.model_training.test_lora
 ```
 
-3. Production Deployment (API & UI)
-Run the hybrid infrastructure:
-
-**Terminal 1 (Native Mac - Backend):**
+3. Production UI
+Run the Agentic Workflow via Streamlit (Native execution recommended for MLX unified memory access):
 ```bash
-python api.py
+streamlit run app.py
 ```
-**Terminal 2 (Docker - Frontend):**
-```bash
-docker-compose up -d --build
-```
-Access the UI at `http://localhost:8501`.
 
 ## Project Structure 
 ```bash
@@ -137,19 +124,14 @@ agentic-mlops-finance/
 ├── data/
 │   ├── raw/                 # Raw financial TXT reports
 │   ├── processed/           # Parquet chunks and JSONL datasets
-│   └── adapters/            # MLX LoRA trained weights
+├── adapters/                # MLX LoRA trained weights (generated locally)
 ├── src/
-│   ├── spark_pipeline/      # PySpark ingestion scripts
-│   ├── dataset_gen/         # Synthetic data generation logic
-│   ├── model_training/      # MLX data formatting and testing
+│   ├── spark_pipeline/      # PySpark ingestion & custom parsing
+│   ├── dataset_gen/         # Synthetic Agentic Distillation logic
+│   ├── model_training/      # MLX formatting and Code-Execution tests
 │   └── production/
-│       ├── pipeline.py      # Dual-model LangGraph integration
-│       ├── graph.py         # Llama-3.1 ReAct Orchestrator
-│       └── tools.py         # ChromaDB & Python tools
+│       ├── graph.py         # LangGraph Compound AI logic
+│       └── tools.py         # ChromaDB Self-Querying & Sandbox tools
 ├── chroma_db/               # Persistent Vector Store
-├── app.py                   # Streamlit Frontend UI
-├── api.py                   # FastAPI Backend
-├── Dockerfile.ui            # Docker configuration for Streamlit
-└── docker-compose.yml       # Orchestration for microservices
+└── app.py                   # Streamlit Frontend UI
 ```
-
