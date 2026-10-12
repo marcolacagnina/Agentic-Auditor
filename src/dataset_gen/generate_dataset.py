@@ -10,6 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()
 api_key_groq = os.environ.get("GROQ_API_KEY")
+groq_model = os.environ.get("GROQ_MODEL")
 
 # --- CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,7 +55,7 @@ def main():
         print("Error: Parquet file not found. Run the Spark pipeline first.")
         return
 
-    llm = ChatGroq(model_name="llama-3.1-8b-instant", 
+    llm = ChatGroq(model_name=groq_model, 
                    temperature=0.2, # Lowered slightly for more deterministic coding outputs
                    api_key=api_key_groq)
     
@@ -99,6 +100,8 @@ def main():
             user_query = extract_tag(raw_result, "user_query")
             thought = extract_tag(raw_result, "thought")
             raw_python = extract_tag(raw_result, "python_code")
+
+            print(raw_result)
             
             if not user_query or not raw_python:
                 print(f"  -> Skipping chunk {row['chunk_id']}: Parsing failed. Missing XML tags.")
@@ -106,6 +109,12 @@ def main():
             
             # Clean up the python code
             python_code = clean_python_code(raw_python)
+
+            try:
+                compile(python_code, "<generated_code>", "exec")
+            except SyntaxError:
+                print(f"  -> Skipping chunk {row['chunk_id']}: invalid Python")
+                continue
             
             # Prepare format for MLX fine-tuning (Completion format)
             system_instruction = "You are an autonomous financial agent. Think step-by-step and write Python code to perform exact calculations."

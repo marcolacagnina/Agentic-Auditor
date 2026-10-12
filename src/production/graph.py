@@ -1,16 +1,19 @@
 import os
 import re
 from typing import TypedDict, Literal, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from dotenv import load_dotenv
 from mlx_lm import load, generate
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 
 from src.production.tools import retrieve_financial_context, execute_python_code
 
 load_dotenv()
+api_key_groq = os.environ.get("GROQ_API_KEY")
+groq_model = os.environ.get("GROQ_MODEL")
 
 # --- PATH CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,8 +50,14 @@ class AgentState(TypedDict):
 
 # --- 3. STRUCTURED OUTPUT SCHEMAS FOR ROUTING ---
 class RouteDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     route: Literal["general_chat", "needs_financial_data"] = Field(
-        description="Choose 'general_chat' for greetings or generic questions. Choose 'needs_financial_data' for questions about companies, revenue, or finance."
+        description=(
+            "Choose general_chat for greetings or generic questions. "
+            "Choose needs_financial_data for questions about companies, "
+            "revenue, or finance."
+        )
     )
 
 class QueryEntities(BaseModel):
@@ -62,12 +71,16 @@ class EvalDecision(BaseModel):
         description="Choose 'insufficient_data' if the context doesn't contain the answer. Choose 'can_answer_directly' for facts like 'Who is the CEO?'. Choose 'needs_math' if percentages, sums, or comparisons are requested."
     )
 
-llm = ChatGroq(model_name="llama-3.1-8b-instant", temperature=0)
+llm = ChatGroq(model_name=groq_model, 
+               temperature=0,
+               api_key=api_key_groq)
 
 # --- 4. GRAPH NODES ---
 def router_node(state: AgentState):
     print("-> [Node: Router] Classifying user intent...")
-    structured_llm = llm.with_structured_output(RouteDecision)
+    structured_llm = llm.with_structured_output(RouteDecision,
+                                                method="json_schema",
+                                                strict=True,)
     prompt = ChatPromptTemplate.from_template("Analyze the user intent: {question}")
     decision = structured_llm.invoke(prompt.format(question=state["question"]))
     return {"router_decision": decision.route}
@@ -97,16 +110,18 @@ def retrieve_node(state: AgentState):
 
 def evaluator_node(state: AgentState):
     print("-> [Node: Evaluator] Checking if context is sufficient and if math is needed...")
-    structured_llm = llm.with_structured_output(EvalDecision)
+    
+    # Add json_mode to help Groq (otherwise it can have problem with pure tool calling as this node)
+    structured_llm = llm.with_structured_output(EvalDecision, method="json_mode")
     
     prompt = ChatPromptTemplate.from_template(
-        "You are a strict data evaluator and router. Your ONLY job is to determine the route. DO NOT answer the question or do any math yourself.\n\n"
+        "You are a strict data evaluator and router. Your ONLY job is to determine the route and output a valid JSON matching the schema.\n\n"
         "User Question: {question}\n"
         "Retrieved Context: {context}\n\n"
-        "CRITICAL RULES:\n"
-        "1. INSUFFICIENT DATA: If the requested company or the specific metric is missing from the context, output 'insufficient_data'.\n"
-        "2. NEEDS MATH: If the data is present AND the user implies ANY calculation (words like 'calculate', 'growth', 'increase', 'decrease', 'difference', 'compare', 'margin', 'percentage'), you MUST output 'needs_math'. DO NOT COMPUTE IT YOURSELF.\n"
-        "3. CAN ANSWER DIRECTLY: Use this ONLY if the user asks for a raw, static fact exactly as written in the text (e.g., 'What was the revenue in 2023?'). If ANY arithmetic is needed, refer to Rule 2."
+        "CRITICAL RULES FOR THE 'route' FIELD:\n"
+        "1. INSUFFICIENT DATA: If the requested company or the specific metric is missing from the context, set the route to 'insufficient_data'.\n"
+        "2. NEEDS MATH: If the data is present AND the user implies ANY calculation (words like 'calculate', 'growth', 'increase', 'decrease', 'difference', 'compare', 'margin', 'percentage'), you MUST set the route to 'needs_math'. DO NOT COMPUTE IT YOURSELF.\n"
+        "3. CAN ANSWER DIRECTLY: Use 'can_answer_directly' ONLY if the user asks for a raw, static fact exactly as written in the text. If ANY arithmetic is needed, refer to Rule 2."
     )
 
     decision = structured_llm.invoke(prompt.format(question=state["question"], context=state["context"]))
@@ -126,8 +141,17 @@ def mlx_coder_node(state: AgentState):
 
 def sandbox_node(state: AgentState):
     print("-> [Node: Sandbox] Executing generated Python code...")
-    if not state["python_code"]:
+    
+    # Check if human blocked execution
+    if state.get("execution_result", "").startswith("Execution blocked"):
+        print("   [Sandbox] Execution bypassed due to Human Rejection.")
+        return {}
+    
+    # Check if there is code to execute
+    if not state.get("python_code"):
         return {"execution_result": "Error: No Python code generated."}
+        
+    # Execute code
     result = execute_python_code(state["python_code"])
     return {"execution_result": result}
 
@@ -161,14 +185,29 @@ def synthesizer_node(state: AgentState):
             "4. Keep the answer short (2-3 sentences max) and professional.\n\n"
             f"Context: {state['context']}"
         )
+
+    else:   # needs_math
+        execution_result = state.get("execution_result", "")
         
-    else: # needs_math
-        if "Execution Error:" in state.get("execution_result", ""):
+        # Error docker/python
+        if "Execution Error:" in execution_result:
             sys_msg = (
                 "You are an executive financial assistant. The internal mathematical calculation failed due to a system error. "
                 "Apologize politely to the user and explain that you cannot compute the exact mathematical result at this moment. "
                 "Do NOT invent the numbers."
             )
+            
+        # Human Reject
+        elif "Execution blocked by Human Reviewer" in execution_result:
+            sys_msg = (
+                "You are an executive financial assistant. "
+                "The mathematical calculation was halted because the Human Reviewer rejected the generated Python code. "
+                "Apologize politely to the user and explain that the execution was blocked for safety or correctness reasons. "
+                "CRITICAL RULE: DO NOT ATTEMPT TO CALCULATE THE ANSWER YOURSELF. "
+                "ONLY state that the operation was aborted by the human reviewer."
+            )
+        
+        # Completed execution of Python
         else:
             sys_msg = (
                 "You are an executive financial assistant. Your ONLY job is to report the EXACT mathematical result provided below to the user in a professional tone.\n\n"
@@ -177,7 +216,7 @@ def synthesizer_node(state: AgentState):
                 "2. DO NOT write formulas or explain how the calculation was done.\n"
                 "3. DO NOT explain that you used Python, a sandbox, or internal tools.\n"
                 "4. Make the answer flow naturally, but the final number MUST be identical to the one in the Sandbox Result.\n\n"
-                f"Exact Mathematical Calculation (from Sandbox): {state['execution_result']}\n"
+                f"Exact Mathematical Calculation (from Sandbox): {execution_result}\n"
             )
     
     prompt = ChatPromptTemplate.from_template(f"{sys_msg}\n\nUser Question: {{question}}")
@@ -213,4 +252,10 @@ workflow.add_edge("coder", "sandbox")
 workflow.add_edge("sandbox", "synthesizer")
 workflow.add_edge("synthesizer", END)
 
-app = workflow.compile()
+# In production this will be SQL or Postgres, here we just use the memory
+memory = MemorySaver()
+
+app = workflow.compile(
+    checkpointer=memory,
+    interrupt_before=["sandbox"]
+)

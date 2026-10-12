@@ -3,6 +3,7 @@ from io import StringIO
 from contextlib import redirect_stdout
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+import docker
 
 # --- PATH CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,6 +37,7 @@ def retrieve_financial_context(query: str, tickers: list = None) -> str:
     except Exception as e:
         return f"Error retrieving data: {str(e)}"
 
+'''
 def execute_python_code(code: str) -> str:
     """Execute code in a secure sandbox and catch the output."""
     local_variables = {}
@@ -57,3 +59,37 @@ def execute_python_code(code: str) -> str:
         return execution_output
     except Exception as e:
         return f"Execution Error: {str(e)}"
+'''
+
+def execute_python_code(code: str) -> str:
+    """Execute generated code securely inside an ephemeral Docker container."""
+    try:
+        client = docker.from_env()
+        
+        container_output = client.containers.run(
+            image="python:3.11-slim",
+            command=["python", "-c", code],
+            remove=True,                 
+            mem_limit="128m",            
+            network_mode="none",         
+            stdout=True,
+            stderr=True,
+            environment={"PYTHONUNBUFFERED": "1"}
+        )
+        
+        execution_output = container_output.decode('utf-8').strip()
+        
+        if not execution_output:
+            return "Execution successful, but no output printed."
+            
+        return execution_output
+        
+    except docker.errors.ContainerError as e:
+        error_msg = e.stderr.decode('utf-8').strip()
+        return f"Code Execution Error: {error_msg}"
+        
+    except docker.errors.ImageNotFound:
+        return "System Error: Docker image 'python:3.11-slim' not found."
+        
+    except Exception as e:
+        return f"Sandbox System Error: {str(e)}"
