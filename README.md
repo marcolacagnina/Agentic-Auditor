@@ -4,6 +4,8 @@
 ![MLX](https://img.shields.io/badge/Local_Compute-Apple_MLX-black)
 ![LangGraph](https://img.shields.io/badge/Agentic-LangGraph-purple)
 ![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B)
+![Docker](https://img.shields.io/badge/Security-Docker_Sandbox-2496ED)
+![LangSmith](https://img.shields.io/badge/LLMOps-LangSmith-white)
 
 
 ## Introduction
@@ -12,14 +14,17 @@ This repository demonstrates a complete, end-to-end **Agentic MLOps** lifecycle 
 
 **Core Capabilities**:
 - **Distributed Data Engineering:** Uses **PySpark** to process raw financial text. Implements custom context-aware chunking (Header Injection) to preserve tabular structures before saving to Parquet files and ChromaDB.
-- **Agentic Distillation:** Leverages Llama-3.1 (Teacher Model via Groq) to autonomously generate an instruction-tuning dataset containing complex Chain-of-Thought reasoning and Python code execution paths.
+- **Agentic Distillation:** Leverages gpt-oss (Teacher Model via Groq) to autonomously generate an instruction-tuning dataset containing complex Chain-of-Thought reasoning and Python code execution paths.
 - **Efficient Fine-Tuning:** Uses Apple's **MLX** framework to natively fine-tune a **Qwen2.5-Coder-3B** model in 4-bit precision on Apple Silicon Unified Memory.
-- **Hybrid Edge-Cloud Orchestration:** Uses **LangGraph** to route traffic. A cloud model (Groq/Llama) acts as a strict Router/Evaluator to prevent hallucinations, while the locally fine-tuned MLX model handles deterministic Python code generation and execution in a sandbox.
+- **Hybrid Edge-Cloud Orchestration:** Uses **LangGraph** to route traffic. A cloud model (Groq/Llama) acts as a strict Router/Evaluator to prevent hallucinations, while the locally fine-tuned MLX model handles deterministic Python code generation.
+- **Enterprise Governance & Security:** Implements a strict **Human-in-the-Loop (HITL)** approval workflow via LangGraph memory checkpointers, and executes code safely within an ephemeral, network-isolated **Docker Sandbox** to prevent RCE vulnerabilities.
 
 ## Key Engineering Highlights
 *   **Self-Querying RAG:** Implemented Metadata filtering (Ticker extraction) pre-retrieval to avoid "context poisoning" across different companies' financial reports.
 *   **Strict Persona Alignment:** The Evaluator node strictly checks if the context contains both the requested *entity* and *metric*. If missing, it overrides the LLM's generic fallback with a strict corporate apology, preventing out-of-domain hallucinations.
-*   **Code Sandbox Execution:** The local model writes Python code that is physically executed on the machine, extracting exact percentages and margins rather than relying on the LLM's flawed internal math.
+*   **Human-in-the-Loop (HITL) Checkpoints:** Leveraging LangGraph's `interrupt_before`, the DAG pauses execution before any critical Python code is run. A human operator must explicitly review and approve the logic via the Streamlit UI, ensuring absolute compliance and auditability.
+*   **Secure Ephemeral Sandbox:** The local MLX model's Python code is physically executed inside a restricted, offline Docker container (`python:3.11-slim`), completely neutralizing the risk of malicious OS operations.
+*   **LLMOps & Observability:** Native integration with **LangSmith** enables distributed tracing of the entire Agentic DAG, monitoring token consumption, execution latency, and step-by-step logic routing.
 
 ## Compound AI System Architecture
 
@@ -33,6 +38,7 @@ graph TD
     classDef local_llm fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
     classDef db fill:#f39c12,stroke:#d35400,stroke-width:2px,color:white;
     classDef tool fill:#e74c3c,stroke:#c0392b,stroke-width:2px,color:white;
+    classDef human fill:#f1c40f,stroke:#f39c12,stroke-width:2px,color:black,font-weight:bold;
 
     %% Nodes
     START((START)):::start_end
@@ -42,7 +48,8 @@ graph TD
     retrieve[(ChromaDB<br><i>Self-Querying</i>)]:::db
     evaluator[Evaluator<br><i>Groq Llama 3.1</i>]:::cloud_llm
     coder[MLX Coder<br><i>Local Qwen 3B</i>]:::local_llm
-    sandbox[Python Sandbox<br><i>Local Execution</i>]:::tool
+    human_review{HITL Review<br><i>Streamlit UI</i>}:::human
+    sandbox[Docker Sandbox<br><i>Ephemeral VM</i>]:::tool
     synthesizer[Synthesizer<br><i>Groq Llama 3.1</i>]:::cloud_llm
 
     %% Edges
@@ -57,28 +64,35 @@ graph TD
     evaluator -- "can_answer_directly" --> synthesizer
     evaluator -- "insufficient_data" --> synthesizer
     
-    coder --> |"Generates Python"| sandbox
+    coder --> |"Generates Python"| human_review
+    human_review -- "Approve" --> sandbox
+    human_review -- "Reject" --> synthesizer
     sandbox --> |"Execution Result"| synthesizer
     
     synthesizer --> END
 ```
 
 ## Prerequisites
-- Apple Silicon Mac (M1/M2/M3) with at least 16GB RAM for MLX local training.
+- Apple Silicon Mac with at least 16GB RAM for MLX local training.
 - Python 3.11
 - Java (Required for PySpark)
-- A valid **Groq API Key**
+- **Docker Desktop** (Running, for secure Sandbox execution)
+- Valid API Keys for **Groq** and **LangSmith**
 
 ## Setup environment
 ```bash
-git clone https://github.com/marcolacagnina/Agentic-Auditor.git
+git clone [https://github.com/marcolacagnina/Agentic-Auditor.git](https://github.com/marcolacagnina/Agentic-Auditor.git)
 cd Agentic-Auditor/
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Create .env file
-echo "GROQ_API_KEY=your_key_here" > .env
+# Create .env file with your credentials
+echo "GROQ_API_KEY=your_groq_key_here" > .env
+echo "LANGCHAIN_TRACING_V2=true" >> .env
+echo "LANGCHAIN_ENDPOINT=[https://api.smith.langchain.com](https://api.smith.langchain.com)" >> .env
+echo "LANGCHAIN_API_KEY=your_langsmith_key_here" >> .env
+echo "LANGCHAIN_PROJECT=Agentic_Auditor" >> .env
 ```
 
 ## Usage Pipeline
